@@ -236,6 +236,16 @@ src_libdrivers_tail_la_SOURCES = src/driver_list_stop.c
 
 src_libdrivers_la_SOURCES = src/drivers.c
 
+src_libdrivers_la_SOURCES += \
+	src/hardware/snap_la_473/protocol.h \
+	src/hardware/snap_la_473/protocol.c \
+	src/hardware/snap_la_473/api.c
+
+src_libdrivers_la_SOURCES += \
+	src/hardware/snap_scope_473/protocol.h \
+	src/hardware/snap_scope_473/protocol.c \
+	src/hardware/snap_scope_473/api.c
+
 if HW_AGILENT_DMM
 src_libdrivers_la_SOURCES += \
 	src/hardware/agilent-dmm/protocol.h \

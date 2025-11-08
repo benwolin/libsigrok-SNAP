@@ -95,6 +95,7 @@ static const uint64_t samplerates[] = {
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
+	sr_err("TEST EDIT");
 	struct sr_config *src;
 	struct sr_dev_inst *sdi;
 	struct sr_serial_dev_inst *serial;

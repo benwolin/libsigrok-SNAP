@@ -4,7 +4,7 @@
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
 #include <stdbool.h>
-#define LOG_PREFIX "SNAP_LA_LOG"
+#define LOG_PREFIX "SNAP_COMBINED_LOG"
 
 
 #define CMD_SET_RATE   0x01

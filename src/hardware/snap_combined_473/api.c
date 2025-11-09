@@ -48,6 +48,10 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     struct sr_dev_inst *sdi;
     struct dev_context *devc;
     struct analog_gen *ag;
+
+    struct sr_channel_group *cg, *acg;
+    struct sr_channel *ch;
+
     GSList *l;
 
     (void)di;
@@ -93,7 +97,9 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
     //oscilloscope
     // Create single analog channel
-    sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "A0");
+    cg = sr_channel_group_new(sdi, "SNAP Oscilloscope", NULL);
+    ch = sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "Oscilloscope");
+    cg->channels = g_slist_append(cg->channels, ch);
 
     // Setup analog generator
     ag = g_malloc0(sizeof(struct analog_gen));
@@ -112,11 +118,15 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     
     devc->ag = ag;
 
+    
+
     //logic analyzer
+    cg = sr_channel_group_new(sdi, "SNAP Logic Analyzer", NULL);
     for (int i = 0; i < 8; i++) {
         char name[4];
         g_snprintf(name, sizeof(name), "%d", i);
-        sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
+        ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
+        cg->channels = g_slist_append(cg->channels, ch);
     }
 
     serial_close(serial);

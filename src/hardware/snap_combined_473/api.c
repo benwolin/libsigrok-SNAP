@@ -482,6 +482,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     struct dev_context *devc = sdi->priv;
     struct sr_serial_dev_inst *serial = sdi->conn;
 	struct sr_trigger *trigger;
+    GSList *l;
+    struct sr_channel *ch;
 
     serial_flush(serial);
     
@@ -499,6 +501,13 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     devc->scope_mode = is_scope_enabled(sdi);
 
     //TODO should I disable logic channels automatically? 
+    if (devc->scope_mode){
+        for (l = sdi->channels; l; l = l->next) {
+			ch = l->data;
+			if (ch->type == SR_CHANNEL_LOGIC)
+				ch->enabled = FALSE;
+		}
+    }
 
 	// Setup software trigger
     if ((trigger = sr_session_trigger_get(sdi->session))) {

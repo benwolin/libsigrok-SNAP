@@ -425,6 +425,11 @@ static gpointer read_thread_func_la(gpointer user_data)
     sr_err("Read thread exiting, got %lu / %lu samples",
             (unsigned long)devc->num_samples,
             (unsigned long)devc->limit_samples);
+    
+    packet.type = SR_DF_END;
+    packet.payload = NULL;
+    sr_session_send(sdi, &packet);
+
 
 	//remove source
 	sr_session_source_remove(sdi->session, -1);

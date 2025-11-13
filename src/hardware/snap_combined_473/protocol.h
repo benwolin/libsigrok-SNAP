@@ -7,10 +7,16 @@
 #define LOG_PREFIX "SNAP_COMBINED_LOG"
 
 
-#define CMD_SET_RATE   0x01
-#define CMD_SET_COUNT  0x02
-#define CMD_START      0x03
-#define CMD_STOP       0x04
+// #define CMD_SET_RATE   0x01
+// #define CMD_SET_COUNT  0x02
+// #define CMD_START      0x03
+// #define CMD_STOP       0x04
+
+#define CMD_LA_START     3
+#define CMD_LA_STOP        4
+#define CMD_LA_GET_CHUNK   5
+#define CMD_LA_CONFIG      6
+#define CMD_DEPRICATED -1
 
 struct dev_context {
     uint64_t limit_samples;
@@ -45,3 +51,5 @@ SR_PRIV int snap_send_short(struct sr_serial_dev_inst *serial, uint8_t cmd);
 SR_PRIV int snap_send_long(struct sr_serial_dev_inst *serial,
                               uint8_t cmd, uint32_t val);
 SR_PRIV int snap_receive_data(int fd, int revents, void *cb_data);
+SR_PRIV int snap_read_response(struct sr_serial_dev_inst *serial); 
+void snap_drain_serial(struct sr_serial_dev_inst *serial);

@@ -73,10 +73,12 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     if (serial_open(serial, SERIAL_RDWR) != SR_OK)
         return NULL;
 
-	printf("SENDING PING!!\n");
-    /* probe: ask for an ID (optional) */
-    snap_send_short(serial, 0x00);
-    g_usleep(20000);
+	// printf("SENDING PING!!\n");
+    // /* probe: ask for an ID (optional) */
+    // snap_send_short(serial, 0x00);
+    // g_usleep(20000);
+
+    //TODO ping for pong
 
     sdi = g_malloc0(sizeof(*sdi));
     sdi->status = SR_ST_INACTIVE;
@@ -184,7 +186,7 @@ static int config_list(uint32_t key, GVariant **data,
 {
     (void)sdi;
     (void)cg;
-	sr_err("SNAP configlist!\n");
+	// sr_err("SNAP configlist!\n");
     switch (key) {
     case SR_CONF_SCAN_OPTIONS:
     case SR_CONF_DEVICE_OPTIONS:
@@ -203,46 +205,6 @@ static int config_list(uint32_t key, GVariant **data,
 }
 
 
-/* ------------------------------------------------------------------------- */
-// static int dev_acquisition_start(const struct sr_dev_inst *sdi)
-// {
-// 	sr_err("dev aq start!");
-//     struct dev_context *devc = sdi->priv;
-//     struct sr_serial_dev_inst *serial = sdi->conn;
-
-
-//     snap_send_long(serial, CMD_SET_RATE, (uint32_t)devc->samplerate);
-//     snap_send_long(serial, CMD_SET_COUNT, (uint32_t)devc->limit_samples);
-//     snap_send_short(serial, CMD_START);
-
-//     devc->num_samples = 0;
-//     std_session_send_df_header(sdi);
-
-//     return serial_source_add(sdi->session, serial, G_IO_IN, 10,
-//                              snap_receive_data, (struct sr_dev_inst *)sdi);
-// }
-
-// static int dev_acquisition_start_w(const struct sr_dev_inst *sdi)
-// {
-//     struct dev_context *devc = sdi->priv;
-//     struct sr_serial_dev_inst *serial = sdi->conn;
-
-//     serial_flush(serial);
-    
-//     snap_send_long(serial, CMD_SET_RATE, (uint32_t)devc->samplerate);
-//     snap_send_long(serial, CMD_SET_COUNT, (uint32_t)devc->limit_samples);
-//     snap_send_short(serial, CMD_START);
-
-//     g_usleep(50000);
-
-//     devc->num_samples = 0;
-//     devc->acquisition_running = TRUE;  // Set flag
-    
-//     std_session_send_df_header(sdi);
-
-//     return serial_source_add(sdi->session, serial, G_IO_IN, 100,
-//                              snap_receive_data, (struct sr_dev_inst *)sdi);
-// }
 
 static gpointer read_thread_func_scope(gpointer user_data)
 {
@@ -332,7 +294,7 @@ static gpointer read_thread_func_scope(gpointer user_data)
             (unsigned long)devc->limit_samples);
 
     sr_session_source_remove(sdi->session, -1);
-    snap_send_short(serial, CMD_STOP);
+    snap_send_short(serial, CMD_DEPRICATED);
     std_session_send_df_end(sdi);
     
     return NULL;
@@ -345,7 +307,7 @@ static gpointer read_thread_func_la(gpointer user_data)
     struct sr_serial_dev_inst *serial = sdi->conn;
     struct sr_datafeed_packet packet;
     struct sr_datafeed_logic logic;
-    unsigned char buf[4096];
+    unsigned char buf[4681]; //32767/7 
     int n;
 	int trigger_offset;
     int pre_trigger_samples;
@@ -377,21 +339,7 @@ static gpointer read_thread_func_la(gpointer user_data)
                     // Trigger fired!
                     devc->trigger_fired = TRUE;
                     sr_dbg("Trigger fired at offset %d", trigger_offset);
-                    
-                    // // Send pre-trigger samples if any
-                    // if (pre_trigger_samples > 0) {
-                    //     packet.type = SR_DF_LOGIC;
-                    //     packet.payload = &logic;
-                    //     logic.length = pre_trigger_samples;
-                    //     logic.unitsize = 1;
-                    //     logic.data = buf;
-                    //     sr_session_send(sdi, &packet);
-                    //     devc->num_samples += pre_trigger_samples;
-                    // }
-                    
-                    // Send trigger marker
-                    // std_session_send_df_trigger(sdi);
-                    
+
                     // Send post-trigger data
                     if (trigger_offset < n) {
                         packet.type = SR_DF_LOGIC;
@@ -436,7 +384,15 @@ static gpointer read_thread_func_la(gpointer user_data)
 
 
     // Send stop command from thread
-    snap_send_short(serial, CMD_STOP);
+    // snap_send_short(serial, CMD_STOP);
+
+    //FLUSH
+    serial_flush(serial);
+    snap_drain_serial(serial);
+    snap_send_short(serial, CMD_LA_STOP);
+    if(snap_read_response(serial) != SR_OK){
+        sr_err("stop command failed");
+    }
     
     // Send completion
     std_session_send_df_end(sdi);
@@ -491,10 +447,56 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     struct sr_channel *ch;
 
     serial_flush(serial);
+    snap_drain_serial(serial);
     
-    snap_send_long(serial, CMD_SET_RATE, (uint32_t)devc->samplerate);
-    snap_send_long(serial, CMD_SET_COUNT, (uint32_t)devc->limit_samples);
-    snap_send_short(serial, CMD_START);
+    //snap_send_long(serial, CMD_SET_RATE, (uint32_t)devc->samplerate);
+    // Send frequency to device
+    uint32_t freq = (uint32_t)devc->samplerate;
+
+    unsigned char pkt[8];
+    pkt[0] = CMD_LA_CONFIG;   // 6
+    pkt[1] = 0;
+    pkt[2] = 0;
+    pkt[3] = 0;
+
+    // Little-endian uint32
+    pkt[4] = freq & 0xFF;
+    pkt[5] = (freq >> 8) & 0xFF;
+    pkt[6] = (freq >> 16) & 0xFF;
+    pkt[7] = (freq >> 24) & 0xFF;
+
+    serial_write_blocking(serial, pkt, 8, serial_timeout(serial, 8));
+    serial_drain(serial);
+
+    // snap_send_long(serial, CMD_SET_COUNT, (uint32_t)devc->limit_samples); //samples limmited by number of chunks requested
+    // snap_send_short(serial, CMD_START);
+    snap_send_short(serial, CMD_LA_START);
+    if(snap_read_response(serial) != SR_OK){
+        sr_err("start command failed");
+        return SR_ERR; 
+    }
+
+    //request num chunks that we need 
+    uint32_t chunks = (devc->limit_samples + 32767 - 1) / 32767;
+    unsigned char cmd[8];
+    cmd[0] = CMD_LA_GET_CHUNK;  // 5
+    cmd[1] = cmd[2] = cmd[3] = 0;
+
+    cmd[4] = chunks & 0xFF;
+    cmd[5] = (chunks >> 8) & 0xFF;
+    cmd[6] = (chunks >> 16) & 0xFF;
+    cmd[7] = (chunks >> 24) & 0xFF;
+
+    unsigned char header[2];
+    sr_err("requesting %d chunks", chunks);
+    serial_write_blocking(serial, cmd, 8, serial_timeout(serial, 8));
+    serial_drain(serial);
+
+    //wait for ok
+    if(snap_read_response(serial) != SR_OK){
+        sr_err("request chunks command failed");
+        return SR_ERR;
+    }
 
     g_usleep(50000);
 
@@ -571,35 +573,7 @@ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 
     return SR_OK;
 }
-// static int dev_acquisition_stop_w(struct sr_dev_inst *sdi)
-// {
-//     struct dev_context *devc = sdi->priv;
-    
-//     sr_err("Stopping acquisition");
-    
-//     // Set flag to stop the callback loop
-//     devc->acquisition_running = FALSE;
-//     sr_err("removing serial soure");
-//     // Remove the serial source (this will stop new callbacks from being scheduled)
-//     serial_source_remove(sdi->session, sdi->conn);
 
-// 	sr_err("send stop cmd");
-// 	// Send stop command to device
-//     snap_send_short(sdi->conn, CMD_STOP);
-    
-// 	sr_err("end marker");
-//     // Send end marker
-//     std_session_send_df_end(sdi);
-    
-//     return SR_OK;
-// }
-// static int dev_acquisition_stop(struct sr_dev_inst *sdi)
-// {
-//     snap_send_short(sdi->conn, CMD_STOP);
-//     std_session_send_df_end(sdi);
-//     serial_source_remove(sdi->session, sdi->conn); //dont close
-//     return SR_OK;
-// }
 
 /* ------------------------------------------------------------------------- */
 static struct sr_dev_driver snap_driver_info = {

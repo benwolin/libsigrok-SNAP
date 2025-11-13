@@ -92,7 +92,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
     devc = g_malloc0(sizeof(*devc));
     sdi->priv = devc;
-    devc->samplerate = SR_MHZ(1);
+    devc->samplerate = SR_KHZ(200);
     devc->limit_samples = 1000000;
 	devc->capture_ratio = 20;
     devc->scope_mode = true;
@@ -102,6 +102,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     cg = sr_channel_group_new(sdi, "SNAP Oscilloscope", NULL);
     ch = sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "Oscilloscope");
     cg->channels = g_slist_append(cg->channels, ch);
+    ch->enabled = FALSE; //start with scope disabled
 
     // Setup analog generator
     ag = g_malloc0(sizeof(struct analog_gen));
@@ -184,6 +185,12 @@ static int config_list(uint32_t key, GVariant **data,
                        const struct sr_dev_inst *sdi,
                        const struct sr_channel_group *cg)
 {
+
+    // Reject channel-group requests
+    if (cg != NULL)
+        return SR_ERR_NA;
+
+        
     (void)sdi;
     (void)cg;
 	// sr_err("SNAP configlist!\n");
@@ -313,7 +320,7 @@ static gpointer read_thread_func_la(gpointer user_data)
     int pre_trigger_samples;
 
 
-    sr_err("Read thread started");
+    sr_err("LA Read thread started");
 
     while (devc->thread_running && devc->num_samples < devc->limit_samples) {
         int to_read = sizeof(buf);
@@ -467,6 +474,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
     serial_write_blocking(serial, pkt, 8, serial_timeout(serial, 8));
     serial_drain(serial);
+    if(snap_read_response(serial) != SR_OK){
+        sr_err("set frequency to %d command failed", freq);
+        return SR_ERR; 
+    }
 
     // snap_send_long(serial, CMD_SET_COUNT, (uint32_t)devc->limit_samples); //samples limmited by number of chunks requested
     // snap_send_short(serial, CMD_START);
@@ -497,6 +508,8 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
         sr_err("request chunks command failed");
         return SR_ERR;
     }
+
+
 
     g_usleep(50000);
 

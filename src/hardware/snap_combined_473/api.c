@@ -256,22 +256,30 @@ static gpointer read_thread_func_scope(gpointer user_data)
             if (num_samples > 0) {
                 sr_spew("Thread read %d bytes (%d samples)", n, num_samples);
                 
-                // Convert 10-bit ADC values to float voltage
+                // // Convert 10-bit ADC values to float voltage
+                // for (i = 0; i < num_samples; i++) {
+                //     // Reconstruct 16-bit value from two bytes
+                //     // Assuming little-endian format: LSB first, then MSB
+                //     adc_value = buf[i*2] | (buf[i*2 + 1] << 8); 
+                    
+                //     // Mask to 10 bits (in case upper bits have garbage)
+                //     adc_value &= 0x3FF;  // 0x3FF = 1023 (10 bits)
+                    
+                //     // Convert to voltage: 10-bit ADC (0-1023) to voltage range
+                //     // Adjust voltage range based on your ADC reference voltage
+                //     // Example: 3.3V reference
+                //     float_buf[i] = (adc_value / 1023.0f) * 3.3f;
+                    
+                //     // Alternative for 5V reference:
+                //     // float_buf[i] = (adc_value / 1023.0f) * 5.0f;
+                // }
+
                 for (i = 0; i < num_samples; i++) {
-                    // Reconstruct 16-bit value from two bytes
-                    // Assuming little-endian format: LSB first, then MSB
-                    adc_value = buf[i*2] | (buf[i*2 + 1] << 8);
-                    
-                    // Mask to 10 bits (in case upper bits have garbage)
-                    adc_value &= 0x3FF;  // 0x3FF = 1023 (10 bits)
-                    
-                    // Convert to voltage: 10-bit ADC (0-1023) to voltage range
-                    // Adjust voltage range based on your ADC reference voltage
-                    // Example: 3.3V reference
-                    float_buf[i] = (adc_value / 1023.0f) * 3.3f;
-                    
-                    // Alternative for 5V reference:
-                    // float_buf[i] = (adc_value / 1023.0f) * 5.0f;
+                    adc_value = buf[i*2] | (buf[i*2 + 1] << 8);  //little endian??
+                    adc_value &= 0x3FF; //mask to 10 bits
+
+                    // Scale from ADC range to −20..20
+                    float_buf[i] = ((adc_value / 1023.0f) * 40.0f) - 20.0f;
                 }
                 
                 // Send analog packet
@@ -301,7 +309,15 @@ static gpointer read_thread_func_scope(gpointer user_data)
             (unsigned long)devc->limit_samples);
 
     sr_session_source_remove(sdi->session, -1);
-    snap_send_short(serial, CMD_DEPRICATED);
+
+    // snap_send_short(serial, CMD_DEPRICATED);
+    serial_flush(serial);
+    snap_drain_serial(serial);
+    snap_send_short(serial, CMD_OS_STOP);
+    if(snap_read_response(serial) != SR_OK){
+        sr_err("stop command failed");
+    }
+
     std_session_send_df_end(sdi);
     
     return NULL;
@@ -453,6 +469,18 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     GSList *l;
     struct sr_channel *ch;
 
+    //check scope
+    devc->scope_mode = is_scope_enabled(sdi);
+
+    //Disable logic analyzer automatically
+    if (devc->scope_mode){
+        for (l = sdi->channels; l; l = l->next) {
+			ch = l->data;
+			if (ch->type == SR_CHANNEL_LOGIC)
+				ch->enabled = FALSE;
+		}
+    }
+
     serial_flush(serial);
     snap_drain_serial(serial);
     
@@ -461,7 +489,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     uint32_t freq = (uint32_t)devc->samplerate;
 
     unsigned char pkt[8];
-    pkt[0] = CMD_LA_CONFIG;   // 6
+    pkt[0] = devc->scope_mode? CMD_OS_CONFIG:CMD_LA_CONFIG;   // 6
     pkt[1] = 0;
     pkt[2] = 0;
     pkt[3] = 0;
@@ -481,16 +509,18 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
     // snap_send_long(serial, CMD_SET_COUNT, (uint32_t)devc->limit_samples); //samples limmited by number of chunks requested
     // snap_send_short(serial, CMD_START);
-    snap_send_short(serial, CMD_LA_START);
+    snap_send_short(serial, devc->scope_mode? CMD_OS_START:CMD_LA_START);
     if(snap_read_response(serial) != SR_OK){
         sr_err("start command failed");
         return SR_ERR; 
     }
 
     //request num chunks that we need 
-    uint32_t chunks = (devc->limit_samples + 32767 - 1) / 32767;
+    uint32_t max_samples_per_chunk = 32767 / (devc->scope_mode? 2:1); 
+    uint32_t chunks = (devc->limit_samples + max_samples_per_chunk - 1) / max_samples_per_chunk;
+
     unsigned char cmd[8];
-    cmd[0] = CMD_LA_GET_CHUNK;  // 5
+    cmd[0] = devc->scope_mode? CMD_OS_GET_CHUNK:CMD_LA_GET_CHUNK;  // 5
     cmd[1] = cmd[2] = cmd[3] = 0;
 
     cmd[4] = chunks & 0xFF;
@@ -517,17 +547,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     devc->thread_running = TRUE;
 	devc->trigger_fired = FALSE;  //init trigger
 
-    //check scope
-    devc->scope_mode = is_scope_enabled(sdi);
-
-    //TODO should I disable logic channels automatically? 
-    if (devc->scope_mode){
-        for (l = sdi->channels; l; l = l->next) {
-			ch = l->data;
-			if (ch->type == SR_CHANNEL_LOGIC)
-				ch->enabled = FALSE;
-		}
-    }
+    
 
 	// Setup software trigger
     if ((trigger = sr_session_trigger_get(sdi->session))) {

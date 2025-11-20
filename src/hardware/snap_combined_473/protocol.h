@@ -16,7 +16,12 @@
 #define CMD_LA_STOP        4
 #define CMD_LA_GET_CHUNK   5
 #define CMD_LA_CONFIG      6
-#define CMD_DEPRICATED -1
+
+#define CMD_OS_START 7
+#define CMD_OS_STOP 8
+#define CMD_OS_GET_CHUNK 9
+#define CMD_OS_CONFIG 10
+
 
 struct dev_context {
     uint64_t limit_samples;

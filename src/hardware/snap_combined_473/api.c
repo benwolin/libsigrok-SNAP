@@ -219,7 +219,7 @@ static gpointer read_thread_func_scope(gpointer user_data)
     struct dev_context *devc = sdi->priv;
     struct sr_serial_dev_inst *serial = sdi->conn;
     struct sr_datafeed_packet packet;
-    unsigned char buf[8192];  // Larger buffer for 2 bytes per sample
+    unsigned char buf[32767*2];  // Larger buffer for 2 bytes per sample
     int n;
     float *float_buf;
     int i, num_samples;
@@ -228,16 +228,16 @@ static gpointer read_thread_func_scope(gpointer user_data)
     sr_info("Read thread started");
 
     // Allocate buffer for float samples
-    float_buf = g_malloc(sizeof(float) * 4096);
+    float_buf = g_malloc(sizeof(float) * 32767);
 
     while (devc->thread_running && devc->num_samples < devc->limit_samples) {
         // Calculate how many bytes to read (2 bytes per 10-bit sample)
         int samples_needed = devc->limit_samples - devc->num_samples;
-        if (samples_needed > 4096)
-            samples_needed = 4096;
+        if (samples_needed > 32767)
+            samples_needed = 32767;
         int to_read = samples_needed * 2;  // 2 bytes per sample
 
-        n = serial_read_blocking(serial, buf, to_read, 20);
+        n = serial_read_blocking(serial, buf, to_read, 200);
         
         if (!devc->thread_running) {
             sr_dbg("Thread stop requested");
@@ -246,33 +246,21 @@ static gpointer read_thread_func_scope(gpointer user_data)
         
         if (n > 0) {
             // Make sure we have complete samples (even number of bytes)
+
             if (n % 2 != 0) {
-                sr_warn("Received odd number of bytes (%d), discarding last byte", n);
-                n--;
+
+                // sr_err("Received odd number of bytes (%d), discarding last byte", n);
+                // n--;
+                int extra = serial_read_blocking(serial, buf+n, 1, 20);
+                n += extra;
+                sr_err("Received odd number of bytes (%d), reading extra bytes (%d)", n, extra);
             }
             
             num_samples = n / 2;  // Each sample is 2 bytes
             
             if (num_samples > 0) {
-                sr_spew("Thread read %d bytes (%d samples)", n, num_samples);
+                sr_err("Thread read %d bytes (%d samples)", n, num_samples);
                 
-                // // Convert 10-bit ADC values to float voltage
-                // for (i = 0; i < num_samples; i++) {
-                //     // Reconstruct 16-bit value from two bytes
-                //     // Assuming little-endian format: LSB first, then MSB
-                //     adc_value = buf[i*2] | (buf[i*2 + 1] << 8); 
-                    
-                //     // Mask to 10 bits (in case upper bits have garbage)
-                //     adc_value &= 0x3FF;  // 0x3FF = 1023 (10 bits)
-                    
-                //     // Convert to voltage: 10-bit ADC (0-1023) to voltage range
-                //     // Adjust voltage range based on your ADC reference voltage
-                //     // Example: 3.3V reference
-                //     float_buf[i] = (adc_value / 1023.0f) * 3.3f;
-                    
-                //     // Alternative for 5V reference:
-                //     // float_buf[i] = (adc_value / 1023.0f) * 5.0f;
-                // }
 
                 for (i = 0; i < num_samples; i++) {
                     adc_value = buf[i*2] | (buf[i*2 + 1] << 8);  //little endian??
@@ -304,7 +292,7 @@ static gpointer read_thread_func_scope(gpointer user_data)
 
     g_free(float_buf);
 
-    sr_info("Read thread exiting, got %lu / %lu samples",
+    sr_err("Read thread exiting, got %lu / %lu samples",
             (unsigned long)devc->num_samples,
             (unsigned long)devc->limit_samples);
 

@@ -1,6 +1,7 @@
 #include <config.h>
 #include "protocol.h"
 #include <stdio.h>
+#include <libserialport.h>  // <--- ADD THIS LINE
 
 #define SERIALCOMM "115200/8n1"
 
@@ -38,6 +39,8 @@ static const uint64_t samplerates[] = {
 
 
 /* ------------------------------------------------------------------------- */
+
+
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
 	printf("SNAP SCAN START!\n");
@@ -72,6 +75,33 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     serial = sr_serial_dev_inst_new(conn, serialcomm);
     if (serial_open(serial, SERIAL_RDWR) != SR_OK)
         return NULL;
+
+    /* --- START NEW CODE --- */
+    // 1. Force DTR and RTS High to wake up the USB CDC firmware
+    // Note: You may need to #include <libserialport.h> if SP_DTR/SP_RTS are not defined
+    // or use raw values: DTR=1, RTS=2 usually, but use the macros if available.
+    /* --- FIX: Direct LibSerialPort Manipulation --- */
+    // We access the underlying libserialport handle stored in serial->data
+    struct sp_port *drv_port = (struct sp_port *)serial->sp_data;    
+    // Assert DTR and RTS (Active High)
+    // Set DTR (Data Terminal Ready) to ON
+    if (sp_set_dtr(drv_port, SP_DTR_ON) != SP_OK) {
+        sr_err("Failed to set DTR!");
+    }
+
+    // Set RTS (Request To Send) to ON
+    if (sp_set_rts(drv_port, SP_RTS_ON) != SP_OK) {
+        sr_err("Failed to set RTS!");
+    }
+    /* ---------------------------------------------- */
+
+    // 2. Give the firmware time to see DTR and initialize its buffers
+    g_usleep(50000); // 50ms wait
+
+    // 3. Flush the "Poop Data" (initialization garbage)
+    serial_flush(serial);
+    /* --- END NEW CODE --- */
+
 
 	// printf("SENDING PING!!\n");
     // /* probe: ask for an ID (optional) */
@@ -469,8 +499,21 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		}
     }
 
+    /* --- NEW FIX: Wake up the USB CDC device --- */
+    // 1. Get the raw libserialport handle (using sp_data)
+    struct sp_port *drv_port = (struct sp_port *)serial->sp_data;
+    
+    // 2. Assert DTR and RTS using the correct libserialport API
+    // This performs the "handshake" that Python does automatically
+    sp_set_dtr(drv_port, SP_DTR_ON);
+    sp_set_rts(drv_port, SP_RTS_ON);
+
+    // 3. Wait for the firmware to initialize buffers
+    g_usleep(50000); 
+
+    // 4. Flush any "poop data" generated during init
     serial_flush(serial);
-    snap_drain_serial(serial);
+    /* ------------------------------------------- */
     
     //snap_send_long(serial, CMD_SET_RATE, (uint32_t)devc->samplerate);
     // Send frequency to device

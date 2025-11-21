@@ -102,6 +102,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     cg = sr_channel_group_new(sdi, "SNAP Oscilloscope", NULL);
     ch = sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "Oscilloscope");
     cg->channels = g_slist_append(cg->channels, ch);
+    sdi->channels = g_slist_append(sdi->channels, ch);   // NEW: Add channel to device
     ch->enabled = FALSE; //start with scope disabled
 
     // Setup analog generator
@@ -113,12 +114,18 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     ag->packet.encoding = &ag->encoding;
     ag->packet.spec = &ag->spec;
     
-    sr_analog_init(&ag->packet, &ag->encoding, &ag->meaning, &ag->spec, 2);
+    sr_analog_init(&ag->packet, &ag->encoding, &ag->meaning, &ag->spec, 1);
     
     ag->meaning.mq = SR_MQ_VOLTAGE;
     ag->meaning.unit = SR_UNIT_VOLT;
     ag->meaning.mqflags = 0;
     
+    // NEW: Encoding parameters
+    ag->encoding.unitsize = sizeof(float); // NEW
+    ag->encoding.is_signed = TRUE;         // NEW (float)
+    ag->encoding.scale = 1.0f;             // NEW (float represents volts directly)
+    ag->encoding.offset = 0.0f;            // NEW
+
     devc->ag = ag;
 
     
@@ -288,13 +295,12 @@ static gpointer read_thread_func_scope(gpointer user_data)
                 
                 devc->ag->packet.data = float_buf;
                 devc->ag->packet.num_samples = num_samples;
-                devc->ag->meaning.channels = g_slist_append(NULL, devc->ag->ch);
                 
-                sr_session_send(sdi, &packet);
+                ag->meaning.channels = g_slist_append(NULL, ag->ch);   // NEW
+
                 devc->num_samples += num_samples;
                 
-                g_slist_free(devc->ag->meaning.channels);
-                devc->ag->meaning.channels = NULL;
+                
             }
         } else if (n < 0) {
             sr_err("Read error: %d", n);

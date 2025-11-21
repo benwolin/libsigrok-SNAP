@@ -267,7 +267,7 @@ static gpointer read_thread_func_scope(gpointer user_data)
             samples_needed = 32767;
         int to_read = samples_needed * 2;  // 2 bytes per sample
 
-        n = serial_read_blocking(serial, buf, to_read, 200);
+        n = serial_read_blocking(serial, buf, to_read, 1000);
         
         if (!devc->thread_running) {
             sr_dbg("Thread stop requested");
@@ -281,7 +281,8 @@ static gpointer read_thread_func_scope(gpointer user_data)
 
                 // sr_err("Received odd number of bytes (%d), discarding last byte", n);
                 // n--;
-                int extra = serial_read_blocking(serial, buf+n, 1, 20);
+                int extra = 0;
+                while (extra==0) extra = serial_read_blocking(serial, buf+n, 1, 20);
                 n += extra;
                 sr_err("Received odd number of bytes (%d), reading extra bytes (%d)", n, extra);
             }

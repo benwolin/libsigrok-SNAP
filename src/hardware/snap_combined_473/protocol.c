@@ -7,6 +7,9 @@ void snap_drain_serial(struct sr_serial_dev_inst *serial) {
     unsigned char tmp[1024];
     int n, total = 0;
 
+    //ping before drain
+    snap_send_command(serial, CMD_PING, NULL, 0);
+
     // short timeout so we return quickly
     while ((n = serial_read_blocking(serial, tmp, sizeof(tmp), 500)) > 0) {
         total += n;

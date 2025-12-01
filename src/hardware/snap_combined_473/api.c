@@ -286,7 +286,7 @@ static gpointer read_thread_func_scope(gpointer user_data)
             samples_needed = 32767;
         int to_read = samples_needed * 2;  // 2 bytes per sample
         sr_err("about to read %d", to_read);
-        n = serial_read_blocking(serial, buf, to_read, 500);
+        n = serial_read_blocking(serial, buf, to_read, 500); //sometimes blocks here
 
         
         if (!devc->thread_running) {
@@ -316,7 +316,6 @@ static gpointer read_thread_func_scope(gpointer user_data)
                     adc_value &= 0x3FF; // Mask to 10 bits
 
                     /* Scale from ADC range to -20..20 */
-                    // float_buf[i] = ((adc_value / 1023.0f) * 40.0f) - 20.0f;
                     float_buf[i] = ((adc_value / 1023.0f) * 40.0f) - 20.0f;
                     
                 }

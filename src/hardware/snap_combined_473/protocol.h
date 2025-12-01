@@ -7,10 +7,7 @@
 #define LOG_PREFIX "SNAP_COMBINED_LOG"
 
 
-// #define CMD_SET_RATE   0x01
-// #define CMD_SET_COUNT  0x02
-// #define CMD_START      0x03
-// #define CMD_STOP       0x04
+#define CMD_PING         15
 
 #define CMD_LA_START     3
 #define CMD_LA_STOP        4
@@ -22,6 +19,10 @@
 #define CMD_OS_GET_CHUNK 9
 #define CMD_OS_CONFIG 10
 
+// Packet protocol constants
+#define PACKET_START_MARKER_REQUEST  0xAA
+#define PACKET_START_MARKER_RESPONSE 0x55
+#define PACKET_HEADER_SIZE 3
 
 struct dev_context {
     uint64_t limit_samples;
@@ -56,5 +57,14 @@ SR_PRIV int snap_send_short(struct sr_serial_dev_inst *serial, uint8_t cmd);
 SR_PRIV int snap_send_long(struct sr_serial_dev_inst *serial,
                               uint8_t cmd, uint32_t val);
 SR_PRIV int snap_receive_data(int fd, int revents, void *cb_data);
-SR_PRIV int snap_read_response(struct sr_serial_dev_inst *serial); 
+// SR_PRIV int snap_read_response(struct sr_serial_dev_inst *serial); 
+
+SR_PRIV int snap_send_command(struct sr_serial_dev_inst *serial, uint8_t cmd, 
+                               const uint8_t *payload, uint8_t payload_len);
+SR_PRIV int snap_read_response(struct sr_serial_dev_inst *serial, 
+                                uint8_t *status, uint8_t **payload, uint8_t *payload_len);
+SR_PRIV int snap_read_exact(struct sr_serial_dev_inst *serial, 
+                             uint8_t *buf, size_t count, unsigned int timeout_ms);
+
+
 void snap_drain_serial(struct sr_serial_dev_inst *serial);

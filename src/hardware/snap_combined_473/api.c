@@ -241,90 +241,144 @@ static int config_list(uint32_t key, GVariant **data,
     return SR_OK;
 }
 
-
-
 static gpointer read_thread_func_scope(gpointer user_data)
 {
     struct sr_dev_inst *sdi = user_data;
     struct dev_context *devc = sdi->priv;
     struct sr_serial_dev_inst *serial = sdi->conn;
     struct sr_datafeed_packet packet;
-    unsigned char *sample_buf = NULL;
-    float *float_buf = NULL;
+    unsigned char buf[32767*2];  // Buffer for 2 bytes per sample
+    int n;
+    float *float_buf;
     int i, num_samples;
     uint16_t adc_value;
-    uint8_t status, *payload, payload_len;
+    uint8_t status, *payload = NULL, payload_len;
     uint32_t total_bytes;
 
-    sr_info("Scope read thread started");
+    uint16_t read_fail_count = 0;
 
-    float_buf = g_malloc(sizeof(float) * 32767);
+    sr_err("Scope read thread started");
 
     /* Read metadata response first */
     if (snap_read_response(serial, &status, &payload, &payload_len) != SR_OK) {
         sr_err("Failed to read chunk metadata");
-        goto cleanup;
     }
 
     if (payload_len < 4) {
         sr_err("Metadata too short");
         if (payload) g_free(payload);
-        goto cleanup;
     }
 
     /* Extract total bytes from metadata (little-endian uint32) */
     total_bytes = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24);
     g_free(payload);
 
-    sr_info("Expecting %u bytes of sample data", total_bytes);
+    sr_err("Expecting %u bytes of sample data", total_bytes);
 
-    /* Allocate buffer for raw sample data */
-    sample_buf = g_malloc(total_bytes);
+    /* Allocate buffer for float samples */
+    float_buf = g_malloc(sizeof(float) * 32767);
 
-    /* Read all sample data */
-    if (snap_read_exact(serial, sample_buf, total_bytes, 30000) != SR_OK) {
-        sr_err("Failed to read sample data");
-        goto cleanup;
+    /* Continuously poll for data until we have enough samples */
+    while (devc->thread_running && devc->num_samples < devc->limit_samples) {
+        /* Calculate how many bytes to read (2 bytes per 10-bit sample) */
+        int samples_needed = devc->limit_samples - devc->num_samples;
+        if (samples_needed > 32767)
+            samples_needed = 32767;
+        int to_read = samples_needed * 2;  // 2 bytes per sample
+        sr_err("about to read %d", to_read);
+        n = serial_read_blocking(serial, buf, to_read, 500);
+
+        
+        if (!devc->thread_running) {
+            sr_err("Thread stop requested");
+            break;
+        }
+        
+        if (n > 0) {
+            read_fail_count = 0;
+            /* Make sure we have complete samples (even number of bytes) */
+            if (n % 2 != 0) {
+                int extra = 0;
+                while (extra == 0) 
+                    extra = serial_read_blocking(serial, buf + n, 1, 20);
+                n += extra;
+                sr_err("Received odd number of bytes, reading extra bytes");
+            }
+            
+            num_samples = n / 2;  // Each sample is 2 bytes
+            
+            if (num_samples > 0) {
+                sr_err("Thread read %d bytes (%d samples)", n, num_samples);
+                
+                /* Convert ADC values to voltage */
+                for (i = 0; i < num_samples; i++) {
+                    adc_value = buf[i*2] | (buf[i*2 + 1] << 8);  // Little endian
+                    adc_value &= 0x3FF; // Mask to 10 bits
+
+                    /* Scale from ADC range to -20..20 */
+                    // float_buf[i] = ((adc_value / 1023.0f) * 40.0f) - 20.0f;
+                    float_buf[i] = ((adc_value / 1023.0f) * 40.0f) - 20.0f;
+                    
+                }
+                sr_err("Sample example: %f", float_buf[1]);
+                
+                /* Send analog packet */
+                packet.type = SR_DF_ANALOG;
+                packet.payload = &devc->ag->packet;
+                
+                devc->ag->packet.data = float_buf;
+                devc->ag->packet.num_samples = num_samples;
+                devc->ag->meaning.channels = g_slist_append(NULL, devc->ag->ch);
+                
+                sr_session_send(sdi, &packet);
+                devc->num_samples += num_samples;
+                
+                g_slist_free(devc->ag->meaning.channels);
+                devc->ag->meaning.channels = NULL;
+            }
+        } 
+        else if (n == 0){
+            ++read_fail_count;
+            if(read_fail_count > 5)
+                sr_err("Read none: %d",read_fail_count );
+            if(read_fail_count > 30){
+                sr_err("Stopped recieving chunks before all requested data");
+                break;
+            }
+        }
+        else if (n < 0) {
+            sr_err("Read error: %d", n);
+            break;
+        }
+        /* n == 0 is just timeout, continue polling */
     }
 
-    /* Process samples */
-    num_samples = total_bytes / 2;  // 2 bytes per sample
-    devc->num_samples = 0;
+    g_free(float_buf);
 
-    for (i = 0; i < num_samples && devc->thread_running; i++) {
-        adc_value = sample_buf[i*2] | (sample_buf[i*2 + 1] << 8);
-        adc_value &= 0x3FF;
-        float_buf[i] = ((adc_value / 1023.0f) * 40.0f) - 20.0f;
-    }
-
-    /* Send analog packet */
-    packet.type = SR_DF_ANALOG;
-    packet.payload = &devc->ag->packet;
-    devc->ag->packet.data = float_buf;
-    devc->ag->packet.num_samples = num_samples;
-    devc->ag->meaning.channels = g_slist_append(NULL, devc->ag->ch);
-    sr_session_send(sdi, &packet);
-    devc->num_samples = num_samples;
-    g_slist_free(devc->ag->meaning.channels);
-    devc->ag->meaning.channels = NULL;
-
-cleanup:
-    sr_info("Scope thread exiting, got %lu samples", (unsigned long)devc->num_samples);
+    sr_err("Scope thread exiting, got %lu / %lu samples",
+            (unsigned long)devc->num_samples,
+            (unsigned long)devc->limit_samples);
     
-    if (sample_buf) g_free(sample_buf);
-    if (float_buf) g_free(float_buf);
-
-    sr_session_source_remove(sdi->session, -1);
+    
+    sr_err("flush");
     serial_flush(serial);
+    sr_err("flush again");
     snap_drain_serial(serial);
     
+    sr_err("Stop streaming OS");
     snap_send_command(serial, CMD_OS_STOP, NULL, 0);
     snap_read_response(serial, &status, &payload, &payload_len);
     if (payload) g_free(payload);
 
     std_session_send_df_end(sdi);
+    sr_session_source_remove(sdi->session, -1);
+    sr_err("exit oscope");
+
+    
     return NULL;
 }
+
+
 
 static gpointer read_thread_func_la(gpointer user_data)
 {
@@ -333,12 +387,14 @@ static gpointer read_thread_func_la(gpointer user_data)
     struct sr_serial_dev_inst *serial = sdi->conn;
     struct sr_datafeed_packet packet;
     struct sr_datafeed_logic logic;
-    unsigned char *sample_buf = NULL;
+    unsigned char buf[4681];  // 32767/7
+    int n;
+    int trigger_offset;
+    int pre_trigger_samples;
     uint8_t status, *payload, payload_len;
     uint32_t total_bytes;
-    int trigger_offset, pre_trigger_samples;
 
-    sr_info("LA read thread started");
+    sr_err("LA read thread started");
 
     /* Read metadata response */
     if (snap_read_response(serial, &status, &payload, &payload_len) != SR_OK) {
@@ -355,52 +411,68 @@ static gpointer read_thread_func_la(gpointer user_data)
     total_bytes = payload[0] | (payload[1] << 8) | (payload[2] << 16) | (payload[3] << 24);
     g_free(payload);
 
-    sr_info("Expecting %u bytes of LA sample data", total_bytes);
+    sr_err("Expecting %u bytes of LA sample data", total_bytes);
 
-    sample_buf = g_malloc(total_bytes);
+    /* Continuously poll for data until we have enough samples */
+    while (devc->thread_running && devc->num_samples < devc->limit_samples) {
+        int to_read = sizeof(buf);
+        if (devc->num_samples + to_read > devc->limit_samples)
+            to_read = devc->limit_samples - devc->num_samples;
 
-    /* Read all sample data */
-    if (snap_read_exact(serial, sample_buf, total_bytes, 30000) != SR_OK) {
-        sr_err("Failed to read LA sample data");
-        goto cleanup;
-    }
-
-    devc->num_samples = 0;
-
-    /* Process with trigger checking */
-    if (devc->stl && !devc->trigger_fired) {
-        trigger_offset = soft_trigger_logic_check(devc->stl,
-                sample_buf, total_bytes, &pre_trigger_samples);
-
-        if (trigger_offset > -1) {
-            devc->trigger_fired = TRUE;
-            sr_info("Trigger fired at offset %d", trigger_offset);
-
-            if (trigger_offset < (int)total_bytes) {
-                packet.type = SR_DF_LOGIC;
-                packet.payload = &logic;
-                logic.length = total_bytes - trigger_offset;
-                logic.unitsize = 1;
-                logic.data = sample_buf + trigger_offset;
-                sr_session_send(sdi, &packet);
-                devc->num_samples = total_bytes - trigger_offset;
-            }
+        /* Blocking read with short timeout to check flag frequently */
+        n = serial_read_blocking(serial, buf, to_read, 100);  // 100ms timeout
+        
+        if (!devc->thread_running) {
+            sr_err("Thread stop requested");
+            break;
         }
-    } else {
-        /* No trigger, send all data */
-        packet.type = SR_DF_LOGIC;
-        packet.payload = &logic;
-        logic.length = total_bytes;
-        logic.unitsize = 1;
-        logic.data = sample_buf;
-        sr_session_send(sdi, &packet);
-        devc->num_samples = total_bytes;
+        
+        if (n > 0) {
+            sr_err("Thread read %d bytes", n);
+            
+            /* Check for trigger if configured and not yet fired */
+            if (devc->stl && !devc->trigger_fired) {
+                trigger_offset = soft_trigger_logic_check(devc->stl,
+                        buf, n, &pre_trigger_samples);
+                
+                if (trigger_offset > -1) {
+                    /* Trigger fired! */
+                    devc->trigger_fired = TRUE;
+                    sr_info("Trigger fired at offset %d", trigger_offset);
+
+                    /* Send post-trigger data */
+                    if (trigger_offset < n) {
+                        packet.type = SR_DF_LOGIC;
+                        packet.payload = &logic;
+                        logic.length = n - trigger_offset;
+                        logic.unitsize = 1;
+                        logic.data = buf + trigger_offset;
+                        sr_session_send(sdi, &packet);
+                        devc->num_samples += n - trigger_offset;
+                    }
+                    sr_info("TRIGGER OCCURRED, STOPPING");
+                    break;  // Stop after trigger
+                }
+                /* Trigger not fired yet, samples are buffered in stl */
+            }
+            
+            /* Send data packet */
+            packet.type = SR_DF_LOGIC;
+            packet.payload = &logic;
+            logic.length = n;
+            logic.unitsize = 1;
+            logic.data = buf;
+            sr_session_send(sdi, &packet);
+            devc->num_samples += n;
+        } else if (n < 0) {
+            sr_err("Read error: %d", n);
+            break;
+        }
+        /* n == 0 is just timeout, continue polling */
     }
 
 cleanup:
-    sr_info("LA thread exiting, got %lu samples", (unsigned long)devc->num_samples);
-
-    if (sample_buf) g_free(sample_buf);
+    sr_err("LA thread exiting, got %lu samples", (unsigned long)devc->num_samples);
 
     sr_session_source_remove(sdi->session, -1);
     serial_flush(serial);
@@ -454,6 +526,7 @@ bool is_scope_enabled(const struct sr_dev_inst *sdi){
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
+    sr_err("dev aq start!");
     struct dev_context *devc = sdi->priv;
     struct sr_serial_dev_inst *serial = sdi->conn;
     struct sr_trigger *trigger;
@@ -476,13 +549,15 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     }
 
     /* Wake up device */
+    sr_err("wake up device!");
     struct sp_port *drv_port = (struct sp_port *)serial->sp_data;
     sp_set_dtr(drv_port, SP_DTR_ON);
     sp_set_rts(drv_port, SP_RTS_ON);
     g_usleep(50000);
+    sr_err("serial flush!");
     serial_flush(serial);
 
-    /* UPDATED: Configure frequency using new protocol */
+    /* Configure frequency */
     freq = (uint32_t)devc->samplerate;
     freq_payload[0] = freq & 0xFF;
     freq_payload[1] = (freq >> 8) & 0xFF;

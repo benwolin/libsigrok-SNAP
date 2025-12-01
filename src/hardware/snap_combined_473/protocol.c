@@ -5,12 +5,14 @@
 
 void snap_drain_serial(struct sr_serial_dev_inst *serial) {
     unsigned char tmp[1024];
-    int n;
+    int n, total = 0;
 
     // short timeout so we return quickly
-    while ((n = serial_read_blocking(serial, tmp, sizeof(tmp), 20)) > 0) {
+    while ((n = serial_read_blocking(serial, tmp, sizeof(tmp), 500)) > 0) {
+        total += n;
         // discard everything
     }
+    sr_err("Flushed %d bytes", total);
 }
 
 /**
@@ -105,7 +107,7 @@ SR_PRIV int snap_read_response(struct sr_serial_dev_inst *serial,
     *status = header[1];
     *payload_len = header[2];
     
-    sr_dbg("Response: status=0x%02x, payload_len=%d", *status, *payload_len);
+    sr_err("Response: status=0x%02x, payload_len=%d", *status, *payload_len);
     
     // Read payload if present
     if (*payload_len > 0) {

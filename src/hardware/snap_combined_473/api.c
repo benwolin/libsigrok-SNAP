@@ -338,8 +338,14 @@ static gpointer read_thread_func_scope(gpointer user_data)
         } 
         else if (n == 0){
             ++read_fail_count;
-            if(read_fail_count > 5)
+            if(read_fail_count > 5){
                 sr_err("Read none: %d",read_fail_count );
+            }
+            if(read_fail_count > 10){
+                sr_err("Attempting to unclog with ping");
+                snap_send_command(serial, CMD_PING, NULL, 0);
+            }
+                
             if(read_fail_count > 30){
                 sr_err("Stopped recieving chunks before all requested data");
                 break;
@@ -358,16 +364,18 @@ static gpointer read_thread_func_scope(gpointer user_data)
             (unsigned long)devc->num_samples,
             (unsigned long)devc->limit_samples);
     
+    sr_err("Stop streaming OS");
+    snap_send_command(serial, CMD_OS_STOP, NULL, 0);
     
     sr_err("flush");
     serial_flush(serial);
     sr_err("flush again");
     snap_drain_serial(serial);
     
-    sr_err("Stop streaming OS");
-    snap_send_command(serial, CMD_OS_STOP, NULL, 0);
-    snap_read_response(serial, &status, &payload, &payload_len);
-    if (payload) g_free(payload);
+    // sr_err("Stop streaming OS");
+    // snap_send_command(serial, CMD_OS_STOP, NULL, 0);
+    // snap_read_response(serial, &status, &payload, &payload_len);
+    // if (payload) g_free(payload);
 
     std_session_send_df_end(sdi);
     sr_session_source_remove(sdi->session, -1);

@@ -14,6 +14,8 @@
 #define CMD_LA_GET_CHUNK   5
 #define CMD_LA_CONFIG      6
 
+#define CMD_NOOP 0
+
 #define CMD_OS_START 7
 #define CMD_OS_STOP 8
 #define CMD_OS_GET_CHUNK 9

@@ -41,130 +41,6 @@ static const uint64_t samplerates[] = {
 /* ------------------------------------------------------------------------- */
 
 
-static GSList *scanDEPRICATED(struct sr_dev_driver *di, GSList *options)
-{
-	sr_err("combined snap start scan");
-    struct sr_config *src;
-    const char *conn = NULL, *serialcomm = NULL;
-    struct sr_serial_dev_inst *serial;
-    struct sr_dev_inst *sdi;
-    struct dev_context *devc;
-    struct analog_gen *ag;
-
-    struct sr_channel_group *cg, *acg;
-    struct sr_channel *ch;
-
-    GSList *l;
-
-    (void)di;
-
-    for (l = options; l; l = l->next) {
-        src = l->data;
-        if (src->key == SR_CONF_CONN)
-            conn = g_variant_get_string(src->data, NULL);
-        else if (src->key == SR_CONF_SERIALCOMM)
-            serialcomm = g_variant_get_string(src->data, NULL);
-    }
-
-    if (!conn)
-        return NULL;
-    if (!serialcomm)
-        serialcomm = SERIALCOMM;
-
-    serial = sr_serial_dev_inst_new(conn, serialcomm);
-    if (serial_open(serial, SERIAL_RDWR) != SR_OK)
-        return NULL;
-
-    /* --- START NEW CODE --- */
-    // 1. Force DTR and RTS High to wake up the USB CDC firmware
-    // Note: You may need to #include <libserialport.h> if SP_DTR/SP_RTS are not defined
-    // or use raw values: DTR=1, RTS=2 usually, but use the macros if available.
-    /* --- FIX: Direct LibSerialPort Manipulation --- */
-    // We access the underlying libserialport handle stored in serial->data
-    struct sp_port *drv_port = (struct sp_port *)serial->sp_data;    
-    // Assert DTR and RTS (Active High)
-    // Set DTR (Data Terminal Ready) to ON
-    if (sp_set_dtr(drv_port, SP_DTR_ON) != SP_OK) {
-        sr_err("Failed to set DTR!");
-    }
-
-    // Set RTS (Request To Send) to ON
-    if (sp_set_rts(drv_port, SP_RTS_ON) != SP_OK) {
-        sr_err("Failed to set RTS!");
-    }
-    /* ---------------------------------------------- */
-
-    // 2. Give the firmware time to see DTR and initialize its buffers
-    g_usleep(50000); // 50ms wait
-
-    // 3. Flush the "Poop Data" (initialization garbage)
-    serial_flush(serial);
-    /* --- END NEW CODE --- */
-
-
-	// printf("SENDING PING!!\n");
-    // /* probe: ask for an ID (optional) */
-    // snap_send_short(serial, 0x00);
-    // g_usleep(20000);
-
-    //TODO ping for pong
-
-    sdi = g_malloc0(sizeof(*sdi));
-    sdi->status = SR_ST_INACTIVE;
-    sdi->inst_type = SR_INST_SERIAL;
-    sdi->conn = serial;
-    sdi->connection_id = g_strdup(serial->port);
-    sdi->vendor = g_strdup("STM32");
-    sdi->model = g_strdup("SNAP Basestaion");
-    sdi->version = g_strdup("1.0");
-	
-
-    devc = g_malloc0(sizeof(*devc));
-    sdi->priv = devc;
-    devc->samplerate = SR_KHZ(200);
-    devc->limit_samples = 1000000;
-	devc->capture_ratio = 20;
-    devc->scope_mode = true;
-
-    //oscilloscope
-    // Create single analog channel
-    cg = sr_channel_group_new(sdi, "SNAP Oscilloscope", NULL);
-    ch = sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "Oscilloscope");
-    cg->channels = g_slist_append(cg->channels, ch);
-    ch->enabled = FALSE; //start with scope disabled
-
-    // Setup analog generator
-    ag = g_malloc0(sizeof(struct analog_gen));
-    ag->ch = g_slist_nth_data(sdi->channels, 0);
-    
-    // Initialize analog structures
-    ag->packet.meaning = &ag->meaning;
-    ag->packet.encoding = &ag->encoding;
-    ag->packet.spec = &ag->spec;
-    
-    sr_analog_init(&ag->packet, &ag->encoding, &ag->meaning, &ag->spec, 2);
-    
-    ag->meaning.mq = SR_MQ_VOLTAGE;
-    ag->meaning.unit = SR_UNIT_VOLT;
-    ag->meaning.mqflags = 0;
-    
-    devc->ag = ag;
-
-    
-
-    //logic analyzer
-    cg = sr_channel_group_new(sdi, "SNAP Logic Analyzer", NULL);
-    for (int i = 0; i < 8; i++) {
-        char name[4];
-        g_snprintf(name, sizeof(name), "%d", i);
-        ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
-        cg->channels = g_slist_append(cg->channels, ch);
-    }
-
-    serial_close(serial);
-    return std_scan_complete(di, g_slist_append(NULL, sdi));
-}//TODO REMOVE
-
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
     sr_err("combined snap start scan");
@@ -199,7 +75,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     if (serial_open(serial, SERIAL_RDWR) != SR_OK)
         return NULL;
 
-    /* --- START NEW CODE --- */
     // 1. Force DTR and RTS High to wake up the USB CDC firmware
     struct sp_port *drv_port = (struct sp_port *)serial->sp_data;    
     // Assert DTR and RTS (Active High)
@@ -216,7 +91,6 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
 
     // 3. Flush the "Poop Data" (initialization garbage)
     serial_flush(serial);
-    /* --- END NEW CODE --- */
 
     // Send PING command and validate response
     sr_err("Sending PING command...");
@@ -438,7 +312,8 @@ static gpointer read_thread_func_scope(gpointer user_data)
             samples_needed = 32767;
         int to_read = samples_needed * 2;  // 2 bytes per sample
         sr_err("about to read %d", to_read);
-        n = serial_read_blocking(serial, buf, to_read, 500); //sometimes blocks here
+        // n = serial_read_blocking(serial, buf, to_read, 500); //sometimes blocks here
+        n = serial_read_nonblocking(serial, buf, to_read);
 
         
         if (!devc->thread_running) {
@@ -493,15 +368,16 @@ static gpointer read_thread_func_scope(gpointer user_data)
             if(read_fail_count > 5){
                 sr_err("Read none: %d",read_fail_count );
             }
-            if(read_fail_count > 10){
-                sr_err("Attempting to unclog with ping");
-                snap_send_command(serial, CMD_PING, NULL, 0);
+            if(read_fail_count == 100){
+                sr_err("Attempting to unclog with noop");
+                snap_send_command(serial, CMD_NOOP, NULL, 0);
             }
                 
-            if(read_fail_count > 30){
+            if(read_fail_count > 200){
                 sr_err("Stopped recieving chunks before all requested data");
                 break;
             }
+            g_usleep(1000); // Sleep 1ms
         }
         else if (n < 0) {
             sr_err("Read error: %d", n);
@@ -552,6 +428,7 @@ static gpointer read_thread_func_la(gpointer user_data)
     int pre_trigger_samples;
     uint8_t status, *payload, payload_len;
     uint32_t total_bytes;
+    uint32_t read_fail_count = 0;
 
     sr_err("LA read thread started");
 
@@ -579,8 +456,9 @@ static gpointer read_thread_func_la(gpointer user_data)
             to_read = devc->limit_samples - devc->num_samples;
 
         /* Blocking read with short timeout to check flag frequently */
-        n = serial_read_blocking(serial, buf, to_read, 100);  // 100ms timeout
-        
+        // n = serial_read_blocking(serial, buf, to_read, 100);  // 100ms timeout
+        n = serial_read_nonblocking(serial, buf, to_read);
+
         if (!devc->thread_running) {
             sr_err("Thread stop requested");
             break;
@@ -588,7 +466,7 @@ static gpointer read_thread_func_la(gpointer user_data)
         
         if (n > 0) {
             sr_err("Thread read %d bytes", n);
-            
+            read_fail_count = 0;
             /* Check for trigger if configured and not yet fired */
             if (devc->stl && !devc->trigger_fired) {
                 trigger_offset = soft_trigger_logic_check(devc->stl,
@@ -623,7 +501,24 @@ static gpointer read_thread_func_la(gpointer user_data)
             logic.data = buf;
             sr_session_send(sdi, &packet);
             devc->num_samples += n;
-        } else if (n < 0) {
+        } 
+        else if (n == 0){
+            ++read_fail_count;
+            if(read_fail_count > 5){
+                sr_err("Read none: %d",read_fail_count );
+            }
+            if(read_fail_count == 100){
+                sr_err("Attempting to unclog with noop");
+                snap_send_command(serial, CMD_NOOP, NULL, 0);
+            }
+                
+            if(read_fail_count > 200){
+                sr_err("Stopped recieving chunks before all requested data");
+                break;
+            }
+            g_usleep(1000); // Sleep 1ms
+        }
+        else if (n < 0) {
             sr_err("Read error: %d", n);
             break;
         }
@@ -632,21 +527,19 @@ static gpointer read_thread_func_la(gpointer user_data)
 
 cleanup:
     sr_err("LA thread exiting, got %lu samples", (unsigned long)devc->num_samples);
-
-    sr_session_source_remove(sdi->session, -1);
+    snap_send_command(serial, CMD_LA_STOP, NULL, 0);
     serial_flush(serial);
     snap_drain_serial(serial);
-
-    snap_send_command(serial, CMD_LA_STOP, NULL, 0);
-    snap_read_response(serial, &status, &payload, &payload_len);
-    if (payload) g_free(payload);
-
     std_session_send_df_end(sdi);
+    
+    // snap_read_response(serial, &status, &payload, &payload_len);
+    // if (payload) g_free(payload);
 
     if (devc->stl) {
         soft_trigger_logic_free(devc->stl);
         devc->stl = NULL;
     }
+    sr_session_source_remove(sdi->session, -1);
 
     return NULL;
 }

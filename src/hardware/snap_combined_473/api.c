@@ -41,10 +41,9 @@ static const uint64_t samplerates[] = {
 /* ------------------------------------------------------------------------- */
 
 
-static GSList *scan(struct sr_dev_driver *di, GSList *options)
+static GSList *scanDEPRICATED(struct sr_dev_driver *di, GSList *options)
 {
-	printf("SNAP SCAN START!\n");
-	sr_err("test snap start scan");
+	sr_err("combined snap start scan");
     struct sr_config *src;
     const char *conn = NULL, *serialcomm = NULL;
     struct sr_serial_dev_inst *serial;
@@ -152,6 +151,159 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     devc->ag = ag;
 
     
+
+    //logic analyzer
+    cg = sr_channel_group_new(sdi, "SNAP Logic Analyzer", NULL);
+    for (int i = 0; i < 8; i++) {
+        char name[4];
+        g_snprintf(name, sizeof(name), "%d", i);
+        ch = sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
+        cg->channels = g_slist_append(cg->channels, ch);
+    }
+
+    serial_close(serial);
+    return std_scan_complete(di, g_slist_append(NULL, sdi));
+}//TODO REMOVE
+
+static GSList *scan(struct sr_dev_driver *di, GSList *options)
+{
+    sr_err("combined snap start scan");
+    struct sr_config *src;
+    const char *conn = NULL, *serialcomm = NULL;
+    struct sr_serial_dev_inst *serial;
+    struct sr_dev_inst *sdi;
+    struct dev_context *devc;
+    struct analog_gen *ag;
+
+    struct sr_channel_group *cg, *acg;
+    struct sr_channel *ch;
+
+    GSList *l;
+
+    (void)di;
+
+    for (l = options; l; l = l->next) {
+        src = l->data;
+        if (src->key == SR_CONF_CONN)
+            conn = g_variant_get_string(src->data, NULL);
+        else if (src->key == SR_CONF_SERIALCOMM)
+            serialcomm = g_variant_get_string(src->data, NULL);
+    }
+
+    if (!conn)
+        return NULL;
+    if (!serialcomm)
+        serialcomm = SERIALCOMM;
+
+    serial = sr_serial_dev_inst_new(conn, serialcomm);
+    if (serial_open(serial, SERIAL_RDWR) != SR_OK)
+        return NULL;
+
+    /* --- START NEW CODE --- */
+    // 1. Force DTR and RTS High to wake up the USB CDC firmware
+    struct sp_port *drv_port = (struct sp_port *)serial->sp_data;    
+    // Assert DTR and RTS (Active High)
+    if (sp_set_dtr(drv_port, SP_DTR_ON) != SP_OK) {
+        sr_err("Failed to set DTR!");
+    }
+
+    if (sp_set_rts(drv_port, SP_RTS_ON) != SP_OK) {
+        sr_err("Failed to set RTS!");
+    }
+
+    // 2. Give the firmware time to see DTR and initialize its buffers
+    g_usleep(50000); // 50ms wait
+
+    // 3. Flush the "Poop Data" (initialization garbage)
+    serial_flush(serial);
+    /* --- END NEW CODE --- */
+
+    // Send PING command and validate response
+    sr_err("Sending PING command...");
+    if (snap_send_command(serial, CMD_PING, NULL, 0) != SR_OK) {
+        sr_err("Failed to send PING command");
+        serial_close(serial);
+        return NULL;
+    }
+
+    // Read response
+    uint8_t status;
+    uint8_t *payload = NULL;
+    uint8_t payload_len;
+    
+    if (snap_read_response(serial, &status, &payload, &payload_len) != SR_OK) {
+        sr_err("Failed to read PING response");
+        serial_close(serial);
+        return NULL;
+    }
+
+    // Validate response: status should be 0 (success) and payload should be "1pong"
+    gboolean valid_response = FALSE;
+    if (status == 0 && payload_len == 5 && payload != NULL) {
+        if (memcmp(payload, "1pong", 5) == 0) {
+            sr_err("Valid PING response received: %.*s", payload_len, payload);
+            valid_response = TRUE;
+        } else {
+            sr_err("Invalid PING payload: %.*s (expected '1pong')", payload_len, payload);
+        }
+    } else {
+        sr_err("Invalid PING response: status=%d, payload_len=%d", status, payload_len);
+    }
+
+    // Free payload memory
+    if (payload != NULL) {
+        g_free(payload);
+    }
+
+    // If ping failed, close serial and return NULL (don't list this device)
+    if (!valid_response) {
+        sr_err("Device at %s did not respond correctly to PING, skipping", conn);
+        serial_close(serial);
+        return NULL;
+    }
+
+    // Device responded correctly, create device instance
+    sr_err("Device at %s validated successfully", conn);
+
+    sdi = g_malloc0(sizeof(*sdi));
+    sdi->status = SR_ST_INACTIVE;
+    sdi->inst_type = SR_INST_SERIAL;
+    sdi->conn = serial;
+    sdi->connection_id = g_strdup(serial->port);
+    sdi->vendor = g_strdup("STM32");
+    sdi->model = g_strdup("SNAP Basestaion");
+    sdi->version = g_strdup("1.0");
+
+    devc = g_malloc0(sizeof(*devc));
+    sdi->priv = devc;
+    devc->samplerate = SR_KHZ(200);
+    devc->limit_samples = 1000000;
+    devc->capture_ratio = 20;
+    devc->scope_mode = true;
+
+    //oscilloscope
+    // Create single analog channel
+    cg = sr_channel_group_new(sdi, "SNAP Oscilloscope", NULL);
+    ch = sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "Oscilloscope");
+    cg->channels = g_slist_append(cg->channels, ch);
+    ch->enabled = FALSE; //start with scope disabled
+
+    // Setup analog generator
+    ag = g_malloc0(sizeof(struct analog_gen));
+    ag->ch = g_slist_nth_data(sdi->channels, 0);
+    
+    // Initialize analog structures
+    ag->packet.meaning = &ag->meaning;
+    ag->packet.encoding = &ag->encoding;
+    ag->packet.spec = &ag->spec;
+    
+    sr_analog_init(&ag->packet, &ag->encoding, &ag->meaning, &ag->spec, 2);
+    
+    ag->meaning.mq = SR_MQ_VOLTAGE;
+    ag->meaning.unit = SR_UNIT_VOLT;
+    ag->meaning.mqflags = 0;
+    
+    devc->ag = ag;
 
     //logic analyzer
     cg = sr_channel_group_new(sdi, "SNAP Logic Analyzer", NULL);

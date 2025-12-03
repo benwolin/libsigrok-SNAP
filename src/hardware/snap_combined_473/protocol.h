@@ -67,6 +67,7 @@ SR_PRIV int snap_read_response(struct sr_serial_dev_inst *serial,
                                 uint8_t *status, uint8_t **payload, uint8_t *payload_len);
 SR_PRIV int snap_read_exact(struct sr_serial_dev_inst *serial, 
                              uint8_t *buf, size_t count, unsigned int timeout_ms);
-
+                             
+bool is_scope_enabled(const struct sr_dev_inst *sdi);
 
 void snap_drain_serial(struct sr_serial_dev_inst *serial);

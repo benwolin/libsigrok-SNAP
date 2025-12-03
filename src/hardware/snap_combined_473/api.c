@@ -32,7 +32,7 @@ static const int32_t trigger_matches[] = {
 
 static const uint64_t samplerates[] = {
 	SR_KHZ(25),
-	SR_GHZ(1),
+	SR_MHZ(20),
 	SR_HZ(1),
 };
 
@@ -56,7 +56,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     struct dev_context *devc;
     struct analog_gen *ag;
 
-    struct sr_channel_group *cg, *acg;
+    struct sr_channel_group *cg;
     struct sr_channel *ch;
 
     GSList *l;

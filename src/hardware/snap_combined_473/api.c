@@ -31,9 +31,14 @@ static const int32_t trigger_matches[] = {
 };
 
 static const uint64_t samplerates[] = {
-	SR_HZ(1),
+	SR_KHZ(25),
 	SR_GHZ(1),
 	SR_HZ(1),
+};
+
+static const uint64_t limit_samples_range[] = {
+    1,             // Minimum samples: 1
+    1000000000,      // Maximum samples: 10 Million (CHANGE THIS to your desired max)
 };
 
 
@@ -260,6 +265,10 @@ static int config_list(uint32_t key, GVariant **data,
         break;
 	case SR_CONF_TRIGGER_MATCH: 
         *data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
+        break;
+    case SR_CONF_LIMIT_SAMPLES:
+        *data = std_gvar_tuple_u64(limit_samples_range[0], 
+                                   limit_samples_range[1]);
         break;
     default:
         return SR_ERR_NA;

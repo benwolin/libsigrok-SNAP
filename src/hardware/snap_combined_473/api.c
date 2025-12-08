@@ -94,7 +94,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
     // 2. Give the firmware time to see DTR and initialize its buffers
     g_usleep(50000); // 50ms wait
 
-    // 3. Flush the "Poop Data" (initialization garbage)
+    // 3. Flush any initialization garbage
     serial_flush(serial);
 
     // Send PING command and validate response
@@ -637,7 +637,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     }
     if (payload) g_free(payload);
 
-    /* UPDATED: Start acquisition */
+    /* Start acquisition */
     if (snap_send_command(serial, devc->scope_mode ? CMD_OS_START : CMD_LA_START,
                           NULL, 0) != SR_OK) {
         sr_err("Failed to send start command");
@@ -650,7 +650,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
     }
     if (payload) g_free(payload);
 
-    /* UPDATED: Request chunks */
+    /* Request chunks */
     max_samples_per_chunk = 32767 / (devc->scope_mode ? 2 : 1);
     chunks = (devc->limit_samples + max_samples_per_chunk - 1) / max_samples_per_chunk;
 
@@ -692,6 +692,10 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 
     std_session_send_df_header(sdi);
 
+    //Add a dummy callback to the session source, this callback doesn't do anything but at least
+    //one callback must be attached to keep the session alive. 
+    //I'm reading the USB stream in a separate thread because Windows was throwing errors when trying serial
+    //operations in the source  
     sr_session_source_add(sdi->session, -1, 0, 100, dummy_callback, (void *)sdi);
 
     devc->read_thread = g_thread_new("snap-reader",
